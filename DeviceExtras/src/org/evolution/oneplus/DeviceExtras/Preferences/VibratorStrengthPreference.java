@@ -1,106 +1,120 @@
 /*
-* Copyright (C) 2016 The OmniROM Project
-* Copyright (C) 2021-2022 The Evolution X Project
-*
-* This program is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 2 of the License, or
-* (at your option) any later version.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with this program. If not, see <http://www.gnu.com/licenses/>.
-*
-*/
+ * Copyright (C) 2016 The OmniROM Project
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
 package org.evolution.oneplus.DeviceExtras.preferences;
 
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.database.ContentObserver;
+import android.util.AttributeSet;
+import android.view.View;
+import android.widget.SeekBar;
+import android.widget.Button;
+import android.os.Bundle;
+import android.util.Log;
 import android.os.Vibrator;
+import android.provider.Settings;
+import androidx.preference.Preference;
 import androidx.preference.PreferenceManager;
 import androidx.preference.PreferenceViewHolder;
-import android.util.AttributeSet;
 
-import org.evolution.oneplus.DeviceExtras.DeviceExtras;
 import org.evolution.oneplus.DeviceExtras.FileUtils;
 import org.evolution.oneplus.DeviceExtras.R;
 
-public class VibratorStrengthPreference extends CustomSeekBarPreference {
+public class VibratorStrengthPreference extends Preference implements
+SeekBar.OnSeekBarChangeListener {
 
-    private static int mDefVal;
+    private SeekBar mSeekBar;
+    private int mOldStrength;
+    private int mMinValue;
+    private int mMaxValue;
     private Vibrator mVibrator;
 
-    private static final int NODE_LEVEL = R.string.node_vibrator_strength_preference;
-    private static long testVibrationPattern[];
+    private static final String FILE_LEVEL = "/sys/devices/platform/soc/89c000.i2c/i2c-2/2-005a/leds/vibrator/level";
+    private static final long testVibrationPattern[] = {
+        0,
+        250
+    };
+    public static final String SETTINGS_KEY = "device_setting_vib_strength";
+    public static final String DEFAULT = "3";
 
     public VibratorStrengthPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
-
-        mInterval = context.getResources().getInteger(R.integer.vibrator_strength_preference_interval);
-        mShowSign = false;
-        mUnits = "";
-        mContinuousUpdates = false;
-
-        int[] mAllValues = context.getResources().getIntArray(R.array.vibrator_strength_preference_array);
-        mMinValue = mAllValues[1];
-        mMaxValue = mAllValues[2];
-        mDefaultValueExists = true;
-        mDefVal = mAllValues[0];
-        mDefaultValue = mDefVal;
-        mValue = Integer.parseInt(loadValue(context));
-
-        int[] tempVibrationPattern = context.getResources().getIntArray(R.array.test_vibration_pattern);
-        testVibrationPattern = new long[tempVibrationPattern.length];
-        for (int i = 0; i < tempVibrationPattern.length; i++) {
-            testVibrationPattern[i] = tempVibrationPattern[i];
-        }
-
-        setPersistent(false);
+        // from drivers/platform/msm/qpnp-haptic.c
+        // #define QPNP_HAP_VMAX_MIN_MV		116
+        // #define QPNP_HAP_VMAX_MAX_MV		3596
+        mMinValue = 0;
+        mMaxValue = 5;
 
         mVibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        setLayoutResource(R.layout.preference_seek_bar);
     }
 
-    private static String getFile(Context context) {
-        String file = context.getString(NODE_LEVEL);
-        if (FileUtils.fileWritable(file)) {
-            return file;
-        }
-        return null;
+    @Override
+    public void onBindViewHolder(PreferenceViewHolder holder) {
+        super.onBindViewHolder(holder);
+
+        mOldStrength = Integer.parseInt(getValue(getContext()));
+        mSeekBar = (SeekBar) holder.findViewById(R.id.seekbar);
+        mSeekBar.setMax(mMaxValue - mMinValue);
+        mSeekBar.setProgress(mOldStrength - mMinValue);
+        mSeekBar.setOnSeekBarChangeListener(this);
     }
 
     public static boolean isSupported(Context context) {
-        return FileUtils.fileWritable(getFile(context));
+        return FileUtils.fileWritable(FILE_LEVEL);
+    }
+
+    public static String getValue(Context context) {
+        String val = FileUtils.getFileValue(FILE_LEVEL, DEFAULT);
+        return val;
+    }
+
+    private void setValue(String newValue, boolean withFeedback) {
+        FileUtils.writeValue(FILE_LEVEL, newValue);
+        Settings.System.putString(getContext().getContentResolver(), SETTINGS_KEY, newValue);
+        if (withFeedback) {
+            mVibrator.vibrate(testVibrationPattern, -1);
+        }
     }
 
     public static void restore(Context context) {
         if (!isSupported(context)) {
             return;
         }
-        
-        int[] mAllValues = context.getResources().getIntArray(R.array.vibrator_strength_preference_array);
-        mDefVal = mAllValues[0];
-        String storedValue = PreferenceManager.getDefaultSharedPreferences(context).getString(DeviceExtras.KEY_VIBSTRENGTH, String.valueOf(mDefVal));
-        FileUtils.writeValue(getFile(context), storedValue);
+        String storedValue = Settings.System.getString(context.getContentResolver(), SETTINGS_KEY);
+        if (storedValue == null) {
+            storedValue = DEFAULT;
+        }
+
+        FileUtils.writeValue(FILE_LEVEL, storedValue);
     }
 
-    public static String loadValue(Context context) {
-        return FileUtils.getFileValue(getFile(context), String.valueOf(mDefVal));
+    public void onProgressChanged(SeekBar seekBar, int progress,
+        boolean fromTouch) {
+        setValue(String.valueOf(progress + mMinValue), true);
     }
 
-    private void saveValue(String newValue) {
-        FileUtils.writeValue(getFile(getContext()), newValue);
-        SharedPreferences.Editor editor = PreferenceManager.getDefaultSharedPreferences(getContext()).edit();
-        editor.putString(DeviceExtras.KEY_VIBSTRENGTH, newValue);
-        editor.apply();
-        mVibrator.vibrate(testVibrationPattern, -1);
+    public void onStartTrackingTouch(SeekBar seekBar) {
+        // NA
     }
 
-    @Override
-    protected void changeValue(int newValue) {
-        saveValue(String.valueOf(newValue));
+    public void onStopTrackingTouch(SeekBar seekBar) {
+        // NA
     }
 }
